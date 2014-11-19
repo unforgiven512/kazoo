@@ -200,6 +200,20 @@ attended_wait(?EVENT(Target, <<"CHANNEL_ANSWER">>, _Evt)
 attended_wait(?EVENT(Target, <<"CHANNEL_BRIDGE">>, Evt)
               ,#state{target=Target
                       ,transferor=Transferor
+                      ,target_b_legs=[]
+                     }=State
+             ) ->
+    case wh_json:get_value(<<"Other-Leg-Call-ID">>, Evt) of
+        Transferor ->
+            lager:debug("recv CHANNEL_BRIDGE on target ~s to transferor ~s", [Target, Transferor]),
+            {'next_state', 'attended_answer', State};
+        _CallId ->
+            lager:debug("recv CHANNEL_BRIDGE on target ~s to call id ~s", [Target, _CallId]),
+            {'next_state', 'attended_wait', State}
+    end;
+attended_wait(?EVENT(Target, <<"CHANNEL_BRIDGE">>, Evt)
+              ,#state{target=Target
+                      ,transferor=Transferor
                       ,target_call=TargetCall
                       ,target_b_legs=[B]
                      }=State
@@ -252,7 +266,7 @@ attended_wait(?EVENT(Target, <<"originate_resp">>, _Evt)
     lager:debug("originate has responded for target ~s", [Target]),
     {'next_state', 'attended_wait', State};
 attended_wait(?EVENT(_CallId, _EventName, _Evt), State) ->
-    lager:debug("attanded_wait: unhandled event ~s for ~s: ~p", [_EventName, _CallId, _Evt]),
+    lager:debug("attended_wait: unhandled event ~s for ~s: ~p", [_EventName, _CallId, _Evt]),
     {'next_state', 'attended_wait', State};
 attended_wait(Msg, State) ->
     lager:debug("attended_wait: unhandled msg ~p", [Msg]),
@@ -422,7 +436,7 @@ attended_answer(?EVENT(CallId, <<"CHANNEL_DESTROY">>, _Evt)
             {'next_state', 'attended_answer', State}
     end;
 attended_answer(?EVENT(_CallId, _EventName, _Evt), State) ->
-    lager:debug("attanded_answer: unhandled event ~s for ~s: ~p", [_EventName, _CallId, _Evt]),
+    lager:debug("attended_answer: unhandled event ~s for ~s: ~p", [_EventName, _CallId, _Evt]),
     {'next_state', 'attended_answer', State};
 attended_answer(Msg, State) ->
     lager:debug("attended_answer: unhandled msg ~p", [Msg]),
