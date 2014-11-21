@@ -197,9 +197,6 @@ merge_attributes([Key|Keys], Account, Endpoint, Owner) ->
     EndpointAttr = wh_json:get_ne_value(Key, Endpoint, wh_json:new()),
     OwnerAttr = wh_json:get_ne_value(Key, Owner, wh_json:new()),
 
-    Key =:= <<"metaflows">>
-        andalso lager:debug("metaflow attrs: ~p ~p ~p", [EndpointAttr, OwnerAttr, AccountAttr]),
-
     Merged = wh_json:merge_recursive([AccountAttr, EndpointAttr, OwnerAttr]
                                      ,fun(_, V) -> wh_util:is_not_empty(V) end
                                     ),
