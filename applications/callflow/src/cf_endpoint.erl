@@ -133,7 +133,8 @@ merge_attributes(Keys, Account, Endpoint, 'undefined') ->
     merge_attributes(Keys
                      ,Account
                      ,wh_json:set_value(<<"owner_id">>, Id, Endpoint)
-                     ,JObj);
+                     ,JObj
+                    );
 merge_attributes(Keys, 'undefined', Endpoint, Owner) ->
     AccountDb = wh_json:get_value(<<"pvt_account_db">>, Endpoint),
     AccountId = wh_json:get_value(<<"pvt_account_id">>, Endpoint),
@@ -162,7 +163,8 @@ merge_attributes([<<"name">> = Key|Keys], Account, Endpoint, Owner) ->
     Name = create_endpoint_name(wh_json:get_ne_value(<<"first_name">>, Owner)
                                 ,wh_json:get_ne_value(<<"last_name">>, Owner)
                                 ,wh_json:get_ne_value(Key, Endpoint)
-                                ,wh_json:get_ne_value(Key, Account)),
+                                ,wh_json:get_ne_value(Key, Account)
+                               ),
     merge_attributes(Keys, Account, wh_json:set_value(Key, Name, Endpoint), Owner);
 merge_attributes([<<"call_forward">> = Key|Keys], Account, Endpoint, Owner) ->
     EndpointAttr = wh_json:get_ne_value(Key, Endpoint, wh_json:new()),
@@ -179,7 +181,8 @@ merge_attributes([<<"caller_id">> = Key|Keys], Account, Endpoint, Owner) ->
     EndpointAttr = wh_json:get_ne_value(Key, Endpoint, wh_json:new()),
     OwnerAttr = caller_id_owner_attr(Owner),
     Merged = wh_json:merge_recursive([AccountAttr, EndpointAttr, OwnerAttr]
-                                     ,fun(_, V) -> wh_util:is_not_empty(V) end),
+                                     ,fun(_, V) -> wh_util:is_not_empty(V) end
+                                    ),
     case wh_json:get_ne_value([<<"emergency">>, <<"number">>], EndpointAttr) of
         'undefined' ->
             merge_attributes(Keys, Account, wh_json:set_value(Key, Merged, Endpoint), Owner);
@@ -193,6 +196,10 @@ merge_attributes([Key|Keys], Account, Endpoint, Owner) ->
     AccountAttr = wh_json:get_ne_value(Key, Account, wh_json:new()),
     EndpointAttr = wh_json:get_ne_value(Key, Endpoint, wh_json:new()),
     OwnerAttr = wh_json:get_ne_value(Key, Owner, wh_json:new()),
+
+    Key =:= <<"metaflows">>
+        andalso lager:debug("metaflow attrs: ~p ~p ~p", [EndpointAttr, OwnerAttr, AccountAttr]),
+
     Merged = wh_json:merge_recursive([AccountAttr, EndpointAttr, OwnerAttr]
                                      ,fun(_, V) -> wh_util:is_not_empty(V) end
                                     ),
@@ -214,7 +221,8 @@ caller_id_owner_attr(Owner) ->
             Name = create_endpoint_name(wh_json:get_ne_value(<<"first_name">>, Owner)
                                         ,wh_json:get_ne_value(<<"last_name">>, Owner)
                                         ,'undefined'
-                                        ,'undefined'),
+                                        ,'undefined'
+                                       ),
             wh_json:set_value([<<"internal">>, <<"name">>], Name, OwnerAttr);
         _Else -> OwnerAttr
     end.
@@ -264,16 +272,15 @@ get_user(AccountDb, Endpoint) ->
     end.
 
 -spec get_users(ne_binary(), ne_binaries()) -> wh_json:objects().
+-spec get_users(ne_binary(), ne_binaries(), wh_json:objects()) -> wh_json:objects().
 get_users(AccountDb, OwnerIds) ->
     get_users(AccountDb, OwnerIds, []).
 
--spec get_users(ne_binary(), ne_binaries(), wh_json:objects()) -> wh_json:objects().
-get_users(_, [], Users) ->
-    Users;
+get_users(_, [], Users) -> Users;
 get_users(AccountDb, [OwnerId|OwnerIds], Users) ->
     case couch_mgr:open_cache_doc(AccountDb, OwnerId) of
-        {'ok', JObj} ->
-            get_users(AccountDb, OwnerIds, [JObj|Users]);
+        {'ok', UserJObj} ->
+            get_users(AccountDb, OwnerIds, [UserJObj|Users]);
         {'error', _R} ->
             lager:warning("failed to load endpoint owner ~s: ~p", [OwnerId, _R]),
             get_users(AccountDb, OwnerIds, Users)
@@ -281,22 +288,18 @@ get_users(AccountDb, [OwnerId|OwnerIds], Users) ->
 
 -spec fix_user_restrictions(wh_json:object()) -> wh_json:object().
 fix_user_restrictions(JObj) ->
-    lists:foldl(fun(Key, J) ->
-                        case wh_json:get_value([<<"call_restriction">>
-                                                ,Key
-                                                ,<<"action">>
-                                               ], J)
-                        of
-                            <<"deny">> -> J;
-                            _Else ->
-                                %% this ensures we override the device
-                                %% but only when there is a user associated
-                                wh_json:set_value([<<"call_restriction">>
-                                                   ,Key
-                                                   ,<<"action">>
-                                                  ], <<"allow">>, J)
-                        end
-                end, JObj, wh_json:get_keys(wnm_util:available_classifiers())).
+    lists:foldl(fun fix_call_restriction/2
+                ,JObj
+                ,wh_json:get_keys(wnm_util:available_classifiers())
+               ).
+
+-spec fix_call_restriction(wh_json:key(), wh_json:object()) -> wh_json:object().
+fix_call_restriction(Key, JObj) ->
+    ActionKey = [<<"call_restriction">>, Key, <<"action">>],
+    case wh_json:get_value(ActionKey, JObj) of
+        <<"deny">> -> JObj;
+        _Else -> wh_json:set_value(ActionKey, <<"allow">>, JObj)
+    end.
 
 -spec convert_to_single_user(wh_json:objects()) -> wh_json:object().
 convert_to_single_user(JObjs) ->
