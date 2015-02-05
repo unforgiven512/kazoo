@@ -32,27 +32,57 @@
 %%
 %% @end
 %%--------------------------------------------------------------------
--spec handle_req(wh_json:object(), wh_proplist()) -> any().
-handle_req(JObj, _Props) ->    
+-spec handle_req(wh_json:object(), wh_proplist()) -> 'ok'.
+handle_req(JObj, _Props) ->
     'true' = wapi_call:event_v(JObj),
     HangupCause = wh_json:get_value(<<"Hangup-Cause">>, JObj, <<"unknown">>),
     case lists:member(HangupCause, ?IGNORE) of
         'true' -> 'ok';
         'false' ->
-            AccountId = wh_json:get_value([<<"Custom-Channel-Vars">>, <<"Account-ID">>], JObj),
-            lager:debug("abnormal call termination: ~s", [HangupCause]),
-            wh_notify:system_alert("~s ~s to ~s (~s) on ~s(~s)"
-                                   ,[wh_util:to_lower_binary(HangupCause)
-                                     ,find_source(JObj)
-                                     ,find_destination(JObj)
-                                     ,find_direction(JObj)
-                                     ,find_realm(JObj, AccountId)
-                                     ,AccountId
-                                    ]
-                                   ,maybe_add_hangup_specific(HangupCause, JObj)
-                                  ),
-            add_to_meters(AccountId, HangupCause)
+            alert_about_hangup(HangupCause, JObj)
     end.
+
+
+-spec alert_about_hangup(wh_json:object(), ne_binary()) -> 'ok'.
+alert_about_hangup(HangupCause, JObj) ->
+    lager:debug("abnormal call termination: ~s", [HangupCause]),
+    EmailTrue = whapps_config:get_is_true(?APP_NAME, <<"enable_email_alerts">>, 'true'),
+    SUBUrl    = whapps_config:get_string(?APP_NAME, <<"subscriber_url">>, <<>>),
+    case {EmailTrue, SUBUrl} of
+        {'false',<<>>} -> UseEmail = 'true';
+        _              -> UseEmail = EmailTrue
+    end,
+    AccountId = wh_json:get_value([<<"Custom-Channel-Vars">>, <<"Account-ID">>], JObj),
+    DataDetails = maybe_add_hangup_specific(HangupCause, JObj),
+    Data = [{<<"hangup_cause">>, wh_util:to_lower_binary(HangupCause)}
+           ,{<<"source">>,       find_source(JObj)}
+           ,{<<"destination">>,  find_destination(JObj)}
+           ,{<<"direction">>,    find_direction(JObj)}
+           ,{<<"realm">>,        find_realm(JObj, AccountId)}
+           ,{<<"account_id">>,   AccountId}
+           ],
+    alert_about_hangup__email(UseEmail, Data, DataDetails),
+    alert_about_hangup__POST(SUBUrl,    Data, DataDetails),
+    add_to_meters(AccountId, HangupCause).
+
+-type ne_binary_proplist() :: [{ne_binary(), ne_binary()}].
+
+-spec alert_about_hangup__POST(string(), ne_binary_proplist(), wh_proplist()) -> 'ok'.
+alert_about_hangup__POST("", _Data, _Details0) -> 'ok';
+alert_about_hangup__POST(SUBUrl, Data, Details0) ->
+    Details = {<<"details">>, {Details0}},
+    Headers = [{"Content-Type", "application/json"}],
+    Encoded = wh_json:encode({[Details] ++ Data}),
+    %% Using default timeout. What do we do on failure?
+    _ = ibrowse:send_req(SUBUrl, Headers, 'post', Encoded),
+    'ok'.
+
+-spec alert_about_hangup__email(boolean(), ne_binary_proplist(), wh_proplist()) -> 'ok'.
+alert_about_hangup__email('false', _Data, _Details) -> 'ok';
+alert_about_hangup__email('true', Data, Details) ->
+    [_Lhs,DataRhs] = lists:unzip(Data),
+    wh_notify:system_alert("~s ~s to ~s (~s) on ~s(~s)", DataRhs, Details).
+
 
 %%--------------------------------------------------------------------
 %% @private
